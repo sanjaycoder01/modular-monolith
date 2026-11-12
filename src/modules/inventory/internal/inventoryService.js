@@ -3,6 +3,7 @@ const {
   InsufficientStockError,
   InvalidStockItemsError,
 } = require('./errors');
+const { toProductForOrderDto } = require('./dto/ProductForOrderDto');
 
 function normalizeItems(items) {
   if (!Array.isArray(items) || items.length === 0) {
@@ -49,11 +50,7 @@ function createInventoryService(getProductModel) {
       throw new ProductNotFoundError(productId);
     }
 
-    return {
-      productId: product._id,
-      name: product.name,
-      unitPrice: product.price,
-    };
+    return toProductForOrderDto(product);
   }
 
   /**

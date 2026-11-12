@@ -1,6 +1,8 @@
 const users = require('../../users');
 const inventory = require('../../inventory');
 const { httpError } = require('./errors');
+const { toOrderItemDto } = require('./dto/OrderItemDto');
+const { toOrderDto } = require('./dto/OrderDto');
 
 /**
  * Place an order using only other modules' front doors.
@@ -41,17 +43,12 @@ function createOrderService(getOrderModel) {
       }
     }
 
-    // 1. Lookups — nothing to undo yet
+    // 1. Lookups — nothing to undo yet (DTOs from other modules' front doors)
     const user = await users.getUserForOrder(userId);
     const lines = [];
     for (const { productId, quantity } of merged.values()) {
       const product = await inventory.getProductForOrder(productId);
-      lines.push({
-        productId: product.productId,
-        productName: product.name,
-        unitPrice: product.unitPrice,
-        quantity,
-      });
+      lines.push(toOrderItemDto(product, quantity));
     }
 
     const totalAmount = lines.reduce(
@@ -76,7 +73,7 @@ function createOrderService(getOrderModel) {
         status: 'PENDING',
         shippingAddress: user.address,
       });
-      return order.toObject();
+      return toOrderDto(order);
     } catch (err) {
       await inventory.releaseStock(toReserve);
       throw err;

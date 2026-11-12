@@ -1,8 +1,9 @@
 const { UserNotFoundError } = require('./errors');
+const { toUserForOrderDto } = require('./dto/UserForOrderDto');
 
 /**
  * Public-facing user reads for other modules.
- * Always return a small DTO — never the raw mongoose document.
+ * Field shaping lives in dto/ — not inlined in each API.
  */
 function createUserService(getUserModel) {
   async function getUserForOrder(userId) {
@@ -13,15 +14,7 @@ function createUserService(getUserModel) {
       throw new UserNotFoundError(userId);
     }
 
-    return {
-      userId: user._id,
-      name: user.name,
-      address: {
-        line1: user.address.line1,
-        city: user.address.city,
-        pincode: user.address.pincode,
-      },
-    };
+    return toUserForOrderDto(user);
   }
 
   return { getUserForOrder };
