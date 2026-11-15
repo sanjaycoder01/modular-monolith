@@ -1,8 +1,17 @@
 const express = require('express');
 const { getModuleConnection } = require('../../shared/db/connections');
-const { createOrderModel } = require('./internal/Order');
+const { createOrderModel, ORDER_STATUSES } = require('./internal/Order');
 const { createOrderService } = require('./internal/orderService');
-const { statusFromError } = require('./internal/errors');
+const {
+  statusFromError,
+  OrderNotFoundError,
+  InvalidOrderTransitionError,
+  OrderStatusConflictError,
+} = require('./internal/errors');
+const {
+  ORDER_TRANSITIONS,
+  canTransition,
+} = require('./internal/orderStateMachine');
 
 let Order;
 let orderService;
@@ -24,13 +33,27 @@ async function initOrdersModule() {
   return { connection, Order };
 }
 
-async function placeOrder(input) {
+function assertReady() {
   if (!orderService) {
     throw new Error(
       'Orders module not initialized. Call initOrdersModule() first.'
     );
   }
+}
+
+async function placeOrder(input) {
+  assertReady();
   return orderService.placeOrder(input);
+}
+
+/**
+ * Public API — advance an order through the owned state machine.
+ * @param {string|import('mongoose').Types.ObjectId} orderId
+ * @param {string} nextStatus
+ */
+async function transitionOrderStatus(orderId, nextStatus) {
+  assertReady();
+  return orderService.transitionOrderStatus(orderId, nextStatus);
 }
 
 function registerRoutes(app) {
@@ -38,8 +61,11 @@ function registerRoutes(app) {
 
   router.post('/', async (req, res) => {
     try {
-      const order = await placeOrder(req.body);
-      res.status(201).json(order);
+      const idempotencyKey =
+        req.get('Idempotency-Key') || req.body?.idempotencyKey;
+      const order = await placeOrder({ ...req.body, idempotencyKey });
+      const statusCode = order.replayed ? 200 : 201;
+      res.status(statusCode).json(order);
     } catch (err) {
       const status = statusFromError(err);
       res.status(status).json({
@@ -55,5 +81,12 @@ function registerRoutes(app) {
 module.exports = {
   initOrdersModule,
   placeOrder,
+  transitionOrderStatus,
   registerRoutes,
+  ORDER_STATUSES,
+  ORDER_TRANSITIONS,
+  canTransition,
+  OrderNotFoundError,
+  InvalidOrderTransitionError,
+  OrderStatusConflictError,
 };

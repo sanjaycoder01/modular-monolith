@@ -2,12 +2,13 @@
  * Public shape returned from Orders APIs.
  * Maps the owned order document → response DTO in one place.
  */
-function toOrderDto(order) {
+function toOrderDto(order, { replayed = false } = {}) {
   const doc = typeof order.toObject === 'function' ? order.toObject() : order;
 
-  return {
+  const dto = {
     orderId: doc._id,
     userId: doc.userId,
+    idempotencyKey: doc.idempotencyKey,
     items: doc.items.map((item) => ({
       productId: item.productId,
       productName: item.productName,
@@ -24,6 +25,12 @@ function toOrderDto(order) {
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
+
+  if (replayed) {
+    dto.replayed = true;
+  }
+
+  return dto;
 }
 
 module.exports = { toOrderDto };
