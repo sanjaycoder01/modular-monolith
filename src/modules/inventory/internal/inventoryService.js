@@ -4,6 +4,7 @@ const {
   InvalidStockItemsError,
 } = require('./errors');
 const { toProductForOrderDto } = require('./dto/ProductForOrderDto');
+const { logger } = require('../../../shared/logging/logger');
 
 function normalizeItems(items) {
   if (!Array.isArray(items) || items.length === 0) {
@@ -43,14 +44,26 @@ function normalizeItems(items) {
  */
 function createInventoryService(getProductModel) {
   async function getProductForOrder(productId) {
+    logger.info('inventory.getProductForOrder start', {
+      productId: String(productId),
+    });
+
     const Product = getProductModel();
     const product = await Product.findById(productId).lean();
 
     if (!product) {
+      logger.warn('inventory.getProductForOrder not found', {
+        productId: String(productId),
+      });
       throw new ProductNotFoundError(productId);
     }
 
-    return toProductForOrderDto(product);
+    const dto = toProductForOrderDto(product);
+    logger.info('inventory.getProductForOrder success', {
+      productId: String(dto.productId),
+      unitPrice: dto.unitPrice,
+    });
+    return dto;
   }
 
   /**
@@ -62,6 +75,13 @@ function createInventoryService(getProductModel) {
     const Product = getProductModel();
     const normalized = normalizeItems(items);
     const reserved = [];
+
+    logger.info('inventory.reserveStock start', {
+      items: normalized.map((i) => ({
+        productId: String(i.productId),
+        quantity: i.quantity,
+      })),
+    });
 
     try {
       for (const item of normalized) {
@@ -79,14 +99,24 @@ function createInventoryService(getProductModel) {
         if (!updated) {
           const exists = await Product.exists({ _id: item.productId });
           if (!exists) {
+            logger.warn('inventory.reserveStock product missing', {
+              productId: String(item.productId),
+            });
             throw new ProductNotFoundError(item.productId);
           }
+          logger.warn('inventory.reserveStock insufficient', {
+            productId: String(item.productId),
+            quantity: item.quantity,
+          });
           throw new InsufficientStockError(item.productId, item.quantity);
         }
 
         reserved.push(item);
       }
 
+      logger.info('inventory.reserveStock success', {
+        reservedCount: reserved.length,
+      });
       return { reserved: normalized };
     } catch (err) {
       if (reserved.length > 0) {
@@ -103,6 +133,13 @@ function createInventoryService(getProductModel) {
   async function releaseStock(items) {
     const Product = getProductModel();
     const normalized = normalizeItems(items);
+
+    logger.info('inventory.releaseStock start', {
+      items: normalized.map((i) => ({
+        productId: String(i.productId),
+        quantity: i.quantity,
+      })),
+    });
 
     for (const item of normalized) {
       const updated = await Product.findOneAndUpdate(
@@ -127,6 +164,9 @@ function createInventoryService(getProductModel) {
       }
     }
 
+    logger.info('inventory.releaseStock success', {
+      releasedCount: normalized.length,
+    });
     return { released: normalized };
   }
 

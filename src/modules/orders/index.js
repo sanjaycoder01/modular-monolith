@@ -1,6 +1,7 @@
 const express = require('express');
 const { getModuleConnection } = require('../../shared/db/connections');
 const { createOrderModel, ORDER_STATUSES } = require('./internal/Order');
+const { createDbTransactionModel } = require('./internal/DbTransaction');
 const { createOrderService } = require('./internal/orderService');
 const {
   statusFromError,
@@ -12,8 +13,11 @@ const {
   ORDER_TRANSITIONS,
   canTransition,
 } = require('./internal/orderStateMachine');
+const { logger } = require('../../shared/logging/logger');
 
+let connection;
 let Order;
+let DbTransaction;
 let orderService;
 
 function getOrderModel() {
@@ -25,12 +29,36 @@ function getOrderModel() {
   return Order;
 }
 
+function getDbTransactionModel() {
+  if (!DbTransaction) {
+    throw new Error(
+      'Orders module not initialized. Call initOrdersModule() first.'
+    );
+  }
+  return DbTransaction;
+}
+
+function getConnection() {
+  if (!connection) {
+    throw new Error(
+      'Orders module not initialized. Call initOrdersModule() first.'
+    );
+  }
+  return connection;
+}
+
 async function initOrdersModule() {
-  const connection = await getModuleConnection('orders');
+  connection = await getModuleConnection('orders');
   Order = createOrderModel(connection);
+  DbTransaction = createDbTransactionModel(connection);
   await Order.createIndexes();
-  orderService = createOrderService(getOrderModel);
-  return { connection, Order };
+  await DbTransaction.createIndexes();
+  orderService = createOrderService({
+    getOrderModel,
+    getDbTransactionModel,
+    getConnection,
+  });
+  return { connection, Order, DbTransaction };
 }
 
 function assertReady() {
@@ -63,11 +91,25 @@ function registerRoutes(app) {
     try {
       const idempotencyKey =
         req.get('Idempotency-Key') || req.body?.idempotencyKey;
+      logger.info('HTTP POST /orders', {
+        userId: req.body?.userId,
+        idempotencyKey,
+      });
       const order = await placeOrder({ ...req.body, idempotencyKey });
       const statusCode = order.replayed ? 200 : 201;
+      logger.info('HTTP POST /orders success', {
+        orderId: String(order.orderId),
+        statusCode,
+        replayed: Boolean(order.replayed),
+      });
       res.status(statusCode).json(order);
     } catch (err) {
       const status = statusFromError(err);
+      logger.error('HTTP POST /orders failed', {
+        status,
+        message: err.message,
+        code: err.code,
+      });
       res.status(status).json({
         error: err.message,
         code: err.code,

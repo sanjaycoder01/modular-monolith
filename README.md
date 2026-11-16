@@ -60,11 +60,24 @@ Requires MongoDB running locally (`mongodb://127.0.0.1:27017`).
 ### First flow: `POST /orders`
 
 ```bash
-curl -s -X POST localhost:3000/orders -H 'Content-Type: application/json' \
+curl -s -X POST localhost:3000/orders \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: checkout-1' \
   -d '{"userId":"<userId>","items":[{"productId":"<productId>","quantity":2}]}'
 ```
 
-Steps inside `placeOrder`: look up user/products → reserve stock → save order → release stock if save fails.
+Steps inside `placeOrder`: look up user/products → reserve stock → **MongoDB transaction** (insert `orders` + `db_transactions`) → release stock if that fails.
+
+### Learning: MongoDB multi-document transaction
+
+When an order is created, Orders opens a session and runs:
+
+1. insert into `orders_db.orders`
+2. insert into `orders_db.db_transactions` (with `orderId`, `userId`, `idempotencyKey`)
+
+Either **both commit** or **both roll back**. Requires a replica set (this project uses `rs0`).
+
+Inventory reserve stays outside the transaction (different module/DB); on txn failure we still `releaseStock()`.
 
 ## Project layout
 

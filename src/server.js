@@ -6,6 +6,7 @@ const { initInventoryModule } = require('./modules/inventory');
 const { initOrdersModule, registerRoutes } = require('./modules/orders');
 const { initPaymentsModule } = require('./modules/payments');
 const { initShippingModule } = require('./modules/shipping');
+const { correlationIdMiddleware } = require('./shared/middleware/correlationId');
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -17,6 +18,9 @@ async function start() {
   await initShippingModule();
 
   const app = express();
+
+  // Correlation ID first so all later middleware/routes share the same ALS context
+  app.use(correlationIdMiddleware);
   app.use(express.json());
 
   app.get('/health', (_req, res) => {

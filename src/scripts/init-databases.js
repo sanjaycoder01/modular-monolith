@@ -7,6 +7,7 @@
  *   users_db.users
  *   inventory_db.products
  *   orders_db.orders
+ *   orders_db.db_transactions   (written in same txn as order create)
  *   payments_db.payments
  *   shipping_db.shipments
  */
@@ -37,6 +38,7 @@ async function initDatabases() {
     users.User.createCollection(),
     inventory.Product.createCollection(),
     orders.Order.createCollection(),
+    orders.DbTransaction.createCollection(),
     payments.Payment.createCollection(),
     shipping.Shipment.createCollection(),
   ]);
@@ -59,6 +61,12 @@ async function initDatabases() {
       database: MODULE_DATABASES.orders,
       collection: 'orders',
       indexes: await orders.Order.collection.indexes(),
+    },
+    {
+      module: 'orders',
+      database: MODULE_DATABASES.orders,
+      collection: 'db_transactions',
+      indexes: await orders.DbTransaction.collection.indexes(),
     },
     {
       module: 'payments',

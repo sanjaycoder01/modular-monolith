@@ -8,6 +8,7 @@ const {
 const { toOrderItemDto } = require('./dto/OrderItemDto');
 const { toOrderDto } = require('./dto/OrderDto');
 const { assertValidTransition } = require('./orderStateMachine');
+const { logger } = require('../../../shared/logging/logger');
 
 function isIdempotencyDuplicateKeyError(err) {
   if (err.code !== 11000) return false;
@@ -18,17 +19,21 @@ function isIdempotencyDuplicateKeyError(err) {
 /**
  * Place an order using only other modules' front doors.
  *
- * Idempotency: same userId + idempotencyKey returns the existing order
- * (no second stock reservation, no second document).
+ * Idempotency: same userId + idempotencyKey returns the existing order.
  *
- * Order of steps (risky work last):
- * 1. Replay check (read-only)
- * 2. Look up user + products (read-only)
- * 3. Reserve stock (first write)
- * 4. Save order; if that fails, release stock
- *    (duplicate-key race → release stock and replay existing)
+ * MongoDB transaction (same database: orders_db):
+ *   1) insert into `orders`
+ *   2) insert into `db_transactions` with that orderId
+ * Both commit together, or both roll back.
+ *
+ * Inventory reserve stays OUTSIDE this transaction (different DB / module).
+ * If the transaction fails after reserve, we still releaseStock().
  */
-function createOrderService(getOrderModel) {
+function createOrderService({
+  getOrderModel,
+  getDbTransactionModel,
+  getConnection,
+}) {
   async function placeOrder({ userId, items, idempotencyKey }) {
     if (!userId) {
       throw httpError(400, 'userId is required');
@@ -40,7 +45,15 @@ function createOrderService(getOrderModel) {
       throw httpError(400, 'idempotencyKey is required');
     }
 
+    logger.info('orders.placeOrder start', {
+      userId: String(userId),
+      idempotencyKey: key,
+      itemCount: Array.isArray(items) ? items.length : 0,
+    });
+
     const Order = getOrderModel();
+    const DbTransaction = getDbTransactionModel();
+    const connection = getConnection();
 
     // Retry path: return the same order, create nothing
     const existing = await Order.findOne({
@@ -48,6 +61,10 @@ function createOrderService(getOrderModel) {
       idempotencyKey: key,
     }).lean();
     if (existing) {
+      logger.info('orders.placeOrder replay', {
+        orderId: String(existing._id),
+        idempotencyKey: key,
+      });
       return toOrderDto(existing, { replayed: true });
     }
 
@@ -87,25 +104,60 @@ function createOrderService(getOrderModel) {
       0
     );
 
-    // 2. Reserve stock — first step that changes data
+    // 2. Reserve stock — first step that changes data (outside txn; other DB)
     const toReserve = lines.map(({ productId, quantity }) => ({
       productId,
       quantity,
     }));
     await inventory.reserveStock(toReserve);
 
-    // 3. Save order; 4. undo reservation if save fails
+    // 3. Transaction: order + db_transactions record (all-or-nothing)
+    const session = await connection.startSession();
+    let createdOrder;
+
     try {
-      const order = await Order.create({
-        userId: user.userId,
-        idempotencyKey: key,
-        items: lines,
-        totalAmount,
-        status: 'PENDING',
-        shippingAddress: user.address,
+      await session.withTransaction(async () => {
+        // Array form is required when passing { session }
+        const [order] = await Order.create(
+          [
+            {
+              userId: user.userId,
+              idempotencyKey: key,
+              items: lines,
+              totalAmount,
+              status: 'PENDING',
+              shippingAddress: user.address,
+            },
+          ],
+          { session }
+        );
+
+        await DbTransaction.create(
+          [
+            {
+              orderId: order._id,
+              userId: user.userId,
+              idempotencyKey: key,
+              operation: 'ORDER_CREATE',
+            },
+          ],
+          { session }
+        );
+
+        createdOrder = order;
       });
-      return toOrderDto(order);
+
+      logger.info('orders.placeOrder created', {
+        orderId: String(createdOrder._id),
+        totalAmount,
+        status: createdOrder.status,
+      });
+      return toOrderDto(createdOrder);
     } catch (err) {
+      logger.error('orders.placeOrder failed; releasing stock', {
+        message: err.message,
+        code: err.code,
+      });
       await inventory.releaseStock(toReserve);
 
       // Concurrent create with same key: other request won — replay it
@@ -115,11 +167,17 @@ function createOrderService(getOrderModel) {
           idempotencyKey: key,
         }).lean();
         if (replay) {
+          logger.info('orders.placeOrder concurrent replay', {
+            orderId: String(replay._id),
+            idempotencyKey: key,
+          });
           return toOrderDto(replay, { replayed: true });
         }
       }
 
       throw err;
+    } finally {
+      await session.endSession();
     }
   }
 
@@ -135,6 +193,11 @@ function createOrderService(getOrderModel) {
     if (!nextStatus) {
       throw httpError(400, 'nextStatus is required');
     }
+
+    logger.info('orders.transitionOrderStatus start', {
+      orderId: String(orderId),
+      nextStatus,
+    });
 
     const Order = getOrderModel();
     const order = await Order.findById(orderId).lean();
@@ -159,6 +222,11 @@ function createOrderService(getOrderModel) {
       throw new OrderStatusConflictError(orderId);
     }
 
+    logger.info('orders.transitionOrderStatus success', {
+      orderId: String(updated._id),
+      from: order.status,
+      to: updated.status,
+    });
     return toOrderDto(updated);
   }
 
