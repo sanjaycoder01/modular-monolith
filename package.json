@@ -9,7 +9,7 @@
     "db:init": "node src/scripts/init-databases.js",
     "seed": "node src/scripts/seed-demo.js",
     "lint": "eslint src",
-    "test": "node --test src/modules/orders/internal/orderStateMachine.test.js src/modules/orders/internal/orderService.transition.test.js src/modules/orders/internal/orderService.idempotency.test.js src/modules/orders/internal/orderService.transaction.test.js src/shared/context/requestContext.test.js src/shared/middleware/correlationId.test.js src/shared/logging/logger.test.js"
+    "test": "node --test src/modules/orders/internal/orderStateMachine.test.js src/modules/orders/internal/orderService.transition.test.js src/modules/orders/internal/orderService.idempotency.test.js src/modules/orders/internal/orderService.transaction.test.js src/modules/orders/internal/orderService.concurrency.test.js src/modules/orders/internal/orderService.outbox.test.js src/modules/orders/internal/outboxWorker.test.js src/modules/payments/internal/paymentService.orderCreated.test.js src/shared/context/requestContext.test.js src/shared/middleware/correlationId.test.js src/shared/logging/logger.test.js"
   },
   "repository": {
     "type": "git",

@@ -42,6 +42,8 @@ No arrow means “joined in a query”. Each arrow is a stored ID; other data ar
 | Inventory | `getProductForOrder(productId)`  | `{ productId, name, unitPrice }`                      |
 | Inventory | `reserveStock(items)`            | atomic `sold++` / `remaining--` (rolls back on fail)  |
 | Inventory | `releaseStock(items)`            | undo a reservation                                    |
+| Payments  | `handleOrderCreatedEvent(...)`   | idempotent attempt-1 `INITIATED` payment for an order |
+| Orders    | `runOutboxWorkerOnce()`          | poll/claim/publish pending outbox events (also auto-started on `npm start`) |
 
 Orders (and others) may only call these via `require('../users')` / `require('../inventory')` — never `internal/`.
 
@@ -66,16 +68,23 @@ curl -s -X POST localhost:3000/orders \
   -d '{"userId":"<userId>","items":[{"productId":"<productId>","quantity":2}]}'
 ```
 
-Steps inside `placeOrder`: look up user/products → reserve stock → **MongoDB transaction** (insert `orders` + `db_transactions`) → release stock if that fails.
+Steps inside `placeOrder`: look up user/products → reserve stock → **MongoDB transaction** (insert `orders` + `db_transactions` + `outbox` OrderCreated) → release stock if that fails.
 
-### Learning: MongoDB multi-document transaction
+### Learning: MongoDB multi-document transaction + transactional outbox
 
 When an order is created, Orders opens a session and runs:
 
 1. insert into `orders_db.orders`
 2. insert into `orders_db.db_transactions` (with `orderId`, `userId`, `idempotencyKey`)
+3. insert into `orders_db.outbox` an `OrderCreated` event (`status: PENDING`)
 
-Either **both commit** or **both roll back**. Requires a replica set (this project uses `rs0`).
+All three **commit together** or **all roll back**. Requires a replica set (this project uses `rs0`).
+
+The outbox stores the event durably with the order so a worker can publish it without losing events on crash.
+
+### Outbox worker (in-process)
+
+After startup, `startOutboxWorker()` polls `orders_db.outbox`, atomically claims `PENDING` rows (`PROCESSING`), calls Payments for `OrderCreated`, then marks `PUBLISHED`. Failures increment `attempts` and set `nextRetryAt` with exponential backoff. Disable with `OUTBOX_WORKER_ENABLED=false`.
 
 Inventory reserve stays outside the transaction (different module/DB); on txn failure we still `releaseStock()`.
 

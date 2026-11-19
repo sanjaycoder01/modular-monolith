@@ -8,6 +8,7 @@
  *   inventory_db.products
  *   orders_db.orders
  *   orders_db.db_transactions   (written in same txn as order create)
+ *   orders_db.outbox            (OrderCreated event in same txn)
  *   payments_db.payments
  *   shipping_db.shipments
  */
@@ -39,6 +40,7 @@ async function initDatabases() {
     inventory.Product.createCollection(),
     orders.Order.createCollection(),
     orders.DbTransaction.createCollection(),
+    orders.Outbox.createCollection(),
     payments.Payment.createCollection(),
     shipping.Shipment.createCollection(),
   ]);
@@ -67,6 +69,12 @@ async function initDatabases() {
       database: MODULE_DATABASES.orders,
       collection: 'db_transactions',
       indexes: await orders.DbTransaction.collection.indexes(),
+    },
+    {
+      module: 'orders',
+      database: MODULE_DATABASES.orders,
+      collection: 'outbox',
+      indexes: await orders.Outbox.collection.indexes(),
     },
     {
       module: 'payments',

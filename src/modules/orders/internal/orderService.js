@@ -17,6 +17,26 @@ function isIdempotencyDuplicateKeyError(err) {
 }
 
 /**
+ * Lean OrderCreated payload for future consumers (payments / notify).
+ * IDs + money + line items only — no shipping address / PII beyond userId.
+ */
+function toOrderCreatedPayload(order) {
+  return {
+    orderId: order._id,
+    userId: order.userId,
+    idempotencyKey: order.idempotencyKey,
+    items: order.items.map((item) => ({
+      productId: item.productId,
+      productName: item.productName,
+      unitPrice: item.unitPrice,
+      quantity: item.quantity,
+    })),
+    totalAmount: order.totalAmount,
+    status: order.status,
+  };
+}
+
+/**
  * Place an order using only other modules' front doors.
  *
  * Idempotency: same userId + idempotencyKey returns the existing order.
@@ -24,7 +44,8 @@ function isIdempotencyDuplicateKeyError(err) {
  * MongoDB transaction (same database: orders_db):
  *   1) insert into `orders`
  *   2) insert into `db_transactions` with that orderId
- * Both commit together, or both roll back.
+ *   3) insert into `outbox` an OrderCreated event (PENDING)
+ * All three commit together, or all roll back.
  *
  * Inventory reserve stays OUTSIDE this transaction (different DB / module).
  * If the transaction fails after reserve, we still releaseStock().
@@ -32,6 +53,7 @@ function isIdempotencyDuplicateKeyError(err) {
 function createOrderService({
   getOrderModel,
   getDbTransactionModel,
+  getOutboxModel,
   getConnection,
 }) {
   async function placeOrder({ userId, items, idempotencyKey }) {
@@ -53,6 +75,7 @@ function createOrderService({
 
     const Order = getOrderModel();
     const DbTransaction = getDbTransactionModel();
+    const Outbox = getOutboxModel();
     const connection = getConnection();
 
     // Retry path: return the same order, create nothing
@@ -111,7 +134,7 @@ function createOrderService({
     }));
     await inventory.reserveStock(toReserve);
 
-    // 3. Transaction: order + db_transactions record (all-or-nothing)
+    // 3. Transaction: order + db_transactions + outbox event (all-or-nothing)
     const session = await connection.startSession();
     let createdOrder;
 
@@ -139,6 +162,21 @@ function createOrderService({
               userId: user.userId,
               idempotencyKey: key,
               operation: 'ORDER_CREATE',
+            },
+          ],
+          { session }
+        );
+
+        await Outbox.create(
+          [
+            {
+              eventType: 'OrderCreated',
+              aggregateType: 'Order',
+              aggregateId: order._id,
+              userId: user.userId,
+              payload: toOrderCreatedPayload(order),
+              status: 'PENDING',
+              attempts: 0,
             },
           ],
           { session }

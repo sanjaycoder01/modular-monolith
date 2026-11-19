@@ -3,7 +3,11 @@ const express = require('express');
 
 const { initUsersModule } = require('./modules/users');
 const { initInventoryModule } = require('./modules/inventory');
-const { initOrdersModule, registerRoutes } = require('./modules/orders');
+const {
+  initOrdersModule,
+  registerRoutes,
+  startOutboxWorker,
+} = require('./modules/orders');
 const { initPaymentsModule } = require('./modules/payments');
 const { initShippingModule } = require('./modules/shipping');
 const { correlationIdMiddleware } = require('./shared/middleware/correlationId');
@@ -13,8 +17,8 @@ const PORT = Number(process.env.PORT) || 3000;
 async function start() {
   await initUsersModule();
   await initInventoryModule();
-  await initOrdersModule();
   await initPaymentsModule();
+  await initOrdersModule();
   await initShippingModule();
 
   const app = express();
@@ -28,6 +32,7 @@ async function start() {
   });
 
   registerRoutes(app);
+  startOutboxWorker();
 
   app.listen(PORT, () => {
     console.log(`Server listening on http://localhost:${PORT}`);

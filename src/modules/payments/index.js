@@ -1,7 +1,9 @@
 const { getModuleConnection } = require('../../shared/db/connections');
-const { createPaymentModel } = require('./internal/Payment');
+const { createPaymentModel, PAYMENT_STATUSES } = require('./internal/Payment');
+const { createPaymentService } = require('./internal/paymentService');
 
 let Payment;
+let paymentService;
 
 async function initPaymentsModule() {
   const connection = await getModuleConnection('payments');
@@ -17,6 +19,7 @@ async function initPaymentsModule() {
   }
 
   await Payment.createIndexes();
+  paymentService = createPaymentService({ getPaymentModel });
   return { connection, Payment };
 }
 
@@ -29,4 +32,25 @@ function getPaymentModel() {
   return Payment;
 }
 
-module.exports = { initPaymentsModule, getPaymentModel };
+function assertPaymentReady() {
+  if (!paymentService) {
+    throw new Error(
+      'Payments module not initialized. Call initPaymentsModule() first.'
+    );
+  }
+}
+
+/**
+ * Public API — consume OrderCreated (idempotent payment initiation).
+ */
+async function handleOrderCreatedEvent(input) {
+  assertPaymentReady();
+  return paymentService.handleOrderCreatedEvent(input);
+}
+
+module.exports = {
+  initPaymentsModule,
+  getPaymentModel,
+  handleOrderCreatedEvent,
+  PAYMENT_STATUSES,
+};

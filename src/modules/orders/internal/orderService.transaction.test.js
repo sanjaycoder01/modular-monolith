@@ -8,14 +8,15 @@ const { initOrdersModule, placeOrder } = require('../index');
 
 /**
  * Demonstrates MongoDB multi-document transactions:
- * - COMMIT: order + db_transactions row both exist
- * - ROLLBACK: if anything fails inside withTransaction, the order is not kept
+ * - COMMIT: order + db_transactions + outbox event all exist
+ * - ROLLBACK: if anything fails inside withTransaction, nothing is kept
  */
 describe('order create MongoDB transaction', () => {
   let User;
   let Product;
   let Order;
   let DbTransaction;
+  let Outbox;
   let connection;
   let userId;
   let productId;
@@ -23,7 +24,7 @@ describe('order create MongoDB transaction', () => {
   before(async () => {
     ({ User } = await initUsersModule());
     ({ Product } = await initInventoryModule());
-    ({ connection, Order, DbTransaction } = await initOrdersModule());
+    ({ connection, Order, DbTransaction, Outbox } = await initOrdersModule());
 
     const user = await User.create({
       name: 'Txn Tester',
@@ -48,7 +49,7 @@ describe('order create MongoDB transaction', () => {
     await disconnectAll();
   });
 
-  it('COMMITS: creates order and db_transactions row together', async () => {
+  it('COMMITS: creates order, db_transactions row, and outbox event together', async () => {
     const key = `txn-commit-${new mongoose.Types.ObjectId()}`;
     const order = await placeOrder({
       userId,
@@ -58,16 +59,25 @@ describe('order create MongoDB transaction', () => {
 
     const storedOrder = await Order.findById(order.orderId).lean();
     const txnRow = await DbTransaction.findOne({ orderId: order.orderId }).lean();
+    const outboxEvent = await Outbox.findOne({
+      aggregateId: order.orderId,
+      eventType: 'OrderCreated',
+    }).lean();
 
     assert.ok(storedOrder, 'order should exist after commit');
     assert.ok(txnRow, 'db_transactions row should exist after commit');
+    assert.ok(outboxEvent, 'outbox OrderCreated should exist after commit');
     assert.equal(String(txnRow.orderId), String(order.orderId));
     assert.equal(String(txnRow.userId), String(userId));
     assert.equal(txnRow.idempotencyKey, key);
     assert.equal(txnRow.operation, 'ORDER_CREATE');
+    assert.equal(outboxEvent.status, 'PENDING');
+    assert.equal(String(outboxEvent.aggregateId), String(order.orderId));
+    assert.equal(String(outboxEvent.userId), String(userId));
 
     await Order.deleteOne({ _id: order.orderId });
     await DbTransaction.deleteOne({ orderId: order.orderId });
+    await Outbox.deleteOne({ _id: outboxEvent._id });
   });
 
   it('ROLLS BACK: order is not kept if transaction throws mid-way', async () => {
@@ -120,8 +130,13 @@ describe('order create MongoDB transaction', () => {
     const txnRow = await DbTransaction.findOne({
       orderId: attemptedOrderId,
     }).lean();
+    const outboxEvent = await Outbox.findOne({
+      aggregateId: attemptedOrderId,
+      eventType: 'OrderCreated',
+    }).lean();
 
     assert.equal(storedOrder, null, 'order must be rolled back');
     assert.equal(txnRow, null, 'db_transactions row must not exist');
+    assert.equal(outboxEvent, null, 'outbox event must not exist');
   });
 });

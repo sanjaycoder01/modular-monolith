@@ -10,13 +10,15 @@ describe('placeOrder idempotency', () => {
   let User;
   let Product;
   let Order;
+  let DbTransaction;
+  let Outbox;
   let userId;
   let productId;
 
   before(async () => {
     ({ User } = await initUsersModule());
     ({ Product } = await initInventoryModule());
-    ({ Order } = await initOrdersModule());
+    ({ Order, DbTransaction, Outbox } = await initOrdersModule());
 
     const user = await User.create({
       name: 'Idempotency Tester',
@@ -72,7 +74,18 @@ describe('placeOrder idempotency', () => {
     const count = await Order.countDocuments({ userId, idempotencyKey: key });
     assert.equal(count, 1);
 
+    const eventCount = await Outbox.countDocuments({
+      aggregateId: first.orderId,
+      eventType: 'OrderCreated',
+    });
+    assert.equal(eventCount, 1);
+
     await Order.deleteOne({ _id: first.orderId });
+    await DbTransaction.deleteOne({ orderId: first.orderId });
+    await Outbox.deleteOne({
+      aggregateId: first.orderId,
+      eventType: 'OrderCreated',
+    });
   });
 
   it('different keys create different orders', async () => {
@@ -89,5 +102,12 @@ describe('placeOrder idempotency', () => {
 
     assert.notEqual(String(a.orderId), String(b.orderId));
     await Order.deleteMany({ _id: { $in: [a.orderId, b.orderId] } });
+    await DbTransaction.deleteMany({
+      orderId: { $in: [a.orderId, b.orderId] },
+    });
+    await Outbox.deleteMany({
+      eventType: 'OrderCreated',
+      aggregateId: { $in: [a.orderId, b.orderId] },
+    });
   });
 });
