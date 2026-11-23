@@ -5,7 +5,6 @@ const DEFAULT_POLL_MS = 2000;
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_RETRY_BASE_MS = 5000;
 const DEFAULT_RETRY_MAX_MS = 5 * 60 * 1000;
-const DEFAULT_STALE_PROCESSING_MS = 5 * 60 * 1000;
 
 function readPositiveInt(envValue, fallback) {
   const n = Number(envValue);
@@ -26,7 +25,6 @@ function computeRetryDelayMs(attemptsAfterFailure, baseMs, maxMs) {
  *   batchSize?: number,
  *   retryBaseMs?: number,
  *   retryMaxMs?: number,
- *   staleProcessingMs?: number,
  * }} deps
  */
 function createOutboxWorker(deps) {
@@ -36,8 +34,6 @@ function createOutboxWorker(deps) {
   const batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
   const retryBaseMs = deps.retryBaseMs ?? DEFAULT_RETRY_BASE_MS;
   const retryMaxMs = deps.retryMaxMs ?? DEFAULT_RETRY_MAX_MS;
-  const staleProcessingMs =
-    deps.staleProcessingMs ?? DEFAULT_STALE_PROCESSING_MS;
 
   let timer = null;
   let ticking = false;
@@ -50,25 +46,6 @@ function createOutboxWorker(deps) {
         { nextRetryAt: { $lte: now } },
       ],
     };
-  }
-
-  async function reclaimStaleProcessing() {
-    const Outbox = getOutboxModel();
-    const staleBefore = new Date(Date.now() - staleProcessingMs);
-    const result = await Outbox.updateMany(
-      { status: 'PROCESSING', updatedAt: { $lt: staleBefore } },
-      {
-        $set: {
-          status: 'PENDING',
-          lastError: 'Reclaimed stale PROCESSING lock',
-        },
-      }
-    );
-    if (result.modifiedCount > 0) {
-      logger.warn('orders.outbox.worker reclaimed stale processing', {
-        count: result.modifiedCount,
-      });
-    }
   }
 
   /**
@@ -156,8 +133,6 @@ function createOutboxWorker(deps) {
     let processed = 0;
 
     try {
-      await reclaimStaleProcessing();
-
       while (processed < batchSize) {
         const event = await claimNextEvent();
         if (!event) break;
@@ -232,10 +207,6 @@ function createOutboxWorkerFromEnv(getOutboxModel) {
     retryMaxMs: readPositiveInt(
       process.env.OUTBOX_RETRY_MAX_MS,
       DEFAULT_RETRY_MAX_MS
-    ),
-    staleProcessingMs: readPositiveInt(
-      process.env.OUTBOX_STALE_PROCESSING_MS,
-      DEFAULT_STALE_PROCESSING_MS
     ),
   });
 }

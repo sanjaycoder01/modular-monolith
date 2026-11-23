@@ -82,9 +82,13 @@ All three **commit together** or **all roll back**. Requires a replica set (this
 
 The outbox stores the event durably with the order so a worker can publish it without losing events on crash.
 
-### Outbox worker (in-process)
+### Outbox workers
 
-After startup, `startOutboxWorker()` polls `orders_db.outbox`, atomically claims `PENDING` rows (`PROCESSING`), calls Payments for `OrderCreated`, then marks `PUBLISHED`. Failures increment `attempts` and set `nextRetryAt` with exponential backoff. Disable with `OUTBOX_WORKER_ENABLED=false`.
+**Publish worker** (in-process with `npm start`): `startOutboxWorker()` polls `orders_db.outbox`, claims `PENDING` rows (`PROCESSING`), calls Payments for `OrderCreated`, then marks `PUBLISHED`. Disable with `OUTBOX_WORKER_ENABLED=false`.
+
+**Stale reclaim worker** (separate process): run `npm run worker:outbox-stale`. It only resets stuck `PROCESSING` rows (e.g. crash mid-publish) back to `PENDING` after `OUTBOX_STALE_PROCESSING_MS`. Poll interval: `OUTBOX_STALE_RECLAIM_POLL_MS`. Disable with `OUTBOX_STALE_WORKER_ENABLED=false`.
+
+For full reliability locally, run both the API and the stale worker.
 
 Inventory reserve stays outside the transaction (different module/DB); on txn failure we still `releaseStock()`.
 
@@ -92,6 +96,7 @@ Inventory reserve stays outside the transaction (different module/DB); on txn fa
 
 ```
 src/
+  workers/outbox-stale-worker.js  # PROCESSING → PENDING reclaim (separate process)
   shared/db/connections.js   # one connection per module DB
   modules/
     users/
