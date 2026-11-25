@@ -22,7 +22,7 @@ describe('handleOrderCreatedEvent', () => {
     await disconnectAll();
   });
 
-  it('creates attempt-1 INITIATED payment for an order', async () => {
+  it('creates CREATED payment for an order', async () => {
     const result = await handleOrderCreatedEvent({
       orderId,
       userId,
@@ -31,13 +31,13 @@ describe('handleOrderCreatedEvent', () => {
 
     assert.equal(String(result.orderId), String(orderId));
     assert.equal(String(result.userId), String(userId));
-    assert.equal(result.attempt, 1);
     assert.equal(result.amount, 4200);
-    assert.equal(result.status, 'INITIATED');
-    assert.equal(result.method, 'COD');
+    assert.equal(result.currency, 'INR');
+    assert.equal(result.status, 'CREATED');
+    assert.equal(result.attemptCount, 0);
     assert.equal(result.replayed, undefined);
 
-    const count = await Payment.countDocuments({ orderId, attempt: 1 });
+    const count = await Payment.countDocuments({ orderId });
     assert.equal(count, 1);
   });
 
@@ -51,10 +51,10 @@ describe('handleOrderCreatedEvent', () => {
     assert.equal(second.replayed, true);
     assert.equal(
       String(second.paymentId),
-      String((await Payment.findOne({ orderId, attempt: 1 }).lean())._id)
+      String((await Payment.findOne({ orderId }).lean())._id)
     );
 
-    const count = await Payment.countDocuments({ orderId, attempt: 1 });
+    const count = await Payment.countDocuments({ orderId });
     assert.equal(count, 1);
   });
 });

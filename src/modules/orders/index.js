@@ -134,6 +134,21 @@ async function transitionOrderStatus(orderId, nextStatus) {
   return orderService.transitionOrderStatus(orderId, nextStatus);
 }
 
+async function getOrderForPayment(orderId, userId) {
+  assertReady();
+  return orderService.getOrderForPayment(orderId, userId);
+}
+
+async function handlePaymentSucceededEvent(input) {
+  assertReady();
+  return orderService.handlePaymentSucceededEvent(input);
+}
+
+async function handlePaymentFailedEvent(input) {
+  assertReady();
+  return orderService.handlePaymentFailedEvent(input);
+}
+
 function registerRoutes(app) {
   const router = express.Router();
 
@@ -174,6 +189,9 @@ module.exports = {
   initOrdersModule,
   placeOrder,
   transitionOrderStatus,
+  getOrderForPayment,
+  handlePaymentSucceededEvent,
+  handlePaymentFailedEvent,
   registerRoutes,
   startOutboxWorker,
   stopOutboxWorker,

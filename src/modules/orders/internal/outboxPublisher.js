@@ -1,4 +1,3 @@
-const payments = require('../../payments');
 const { logger } = require('../../../shared/logging/logger');
 
 /**
@@ -6,6 +5,7 @@ const { logger } = require('../../../shared/logging/logger');
  * @param {import('mongoose').Document} event — claimed Outbox document
  */
 async function publishOutboxEvent(event) {
+  const payments = require('../../payments');
   const doc = typeof event.toObject === 'function' ? event.toObject() : event;
 
   logger.info('orders.outbox.publish start', {

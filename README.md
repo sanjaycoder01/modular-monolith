@@ -19,7 +19,7 @@ Small e-commerce app for learning **modular monolith** architecture with MongoDB
 | Users      | `users_db`     | `users`     | unique `email` (stored lowercased + trimmed)     |
 | Inventory  | `inventory_db` | `products`  | `type`, `name`                                   |
 | Orders     | `orders_db`    | `orders`    | `userId+createdAt`, `status`                     |
-| Payments   | `payments_db`  | `payments`  | unique `{ orderId, attempt }` (retries allowed)  |
+| Payments   | `payments_db`  | `payments`, `payment_attempts`, `mock_gateway_transactions`, `outbox` | unique `orderId` on payments; unique `{ paymentId, attemptNumber }` |
 | Shipping   | `shipping_db`  | `shipments` | unique `orderId`, sparse `trackingNumber`        |
 
 ### How they relate (IDs only)
@@ -28,7 +28,7 @@ Small e-commerce app for learning **modular monolith** architecture with MongoDB
 users._id ───────────┐
 products._id ────────┤ referenced by ID only
                      ▼
-                  orders ──orderId──► payments (many attempts)
+                  orders ──orderId──► payments (1) ──► payment_attempts (many)
                      └────orderId──► shipments
 ```
 
@@ -42,7 +42,9 @@ No arrow means “joined in a query”. Each arrow is a stored ID; other data ar
 | Inventory | `getProductForOrder(productId)`  | `{ productId, name, unitPrice }`                      |
 | Inventory | `reserveStock(items)`            | atomic `sold++` / `remaining--` (rolls back on fail)  |
 | Inventory | `releaseStock(items)`            | undo a reservation                                    |
-| Payments  | `handleOrderCreatedEvent(...)`   | idempotent attempt-1 `INITIATED` payment for an order |
+| Payments  | `handleOrderCreatedEvent(...)`   | idempotent `CREATED` payment for an order |
+| Payments  | `POST /payments/pay`             | Pay Now (mock gateway, idempotent) |
+| Orders    | `handlePaymentSucceededEvent`    | idempotent `PENDING` → `CONFIRMED` |
 | Orders    | `runOutboxWorkerOnce()`          | poll/claim/publish pending outbox events (also auto-started on `npm start`) |
 
 Orders (and others) may only call these via `require('../users')` / `require('../inventory')` — never `internal/`.
@@ -110,7 +112,7 @@ src/
       internal/Order.js
     payments/
       index.js
-      internal/Payment.js    # unique { orderId, attempt }
+      internal/Payment.js, PaymentAttempt.js, mockPaymentGateway.js
     shipping/
       index.js
       internal/Shipment.js

@@ -8,7 +8,11 @@ const {
   registerRoutes,
   startOutboxWorker,
 } = require('./modules/orders');
-const { initPaymentsModule } = require('./modules/payments');
+const {
+  initPaymentsModule,
+  registerRoutes: registerPaymentRoutes,
+  startPaymentsOutboxWorker,
+} = require('./modules/payments');
 const { initShippingModule } = require('./modules/shipping');
 const { correlationIdMiddleware } = require('./shared/middleware/correlationId');
 
@@ -32,7 +36,9 @@ async function start() {
   });
 
   registerRoutes(app);
+  registerPaymentRoutes(app);
   startOutboxWorker();
+  startPaymentsOutboxWorker();
 
   app.listen(PORT, () => {
     console.log(`Server listening on http://localhost:${PORT}`);

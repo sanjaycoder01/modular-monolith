@@ -268,7 +268,107 @@ function createOrderService({
     return toOrderDto(updated);
   }
 
-  return { placeOrder, transitionOrderStatus };
+  /**
+   * Trusted read model for Payments — IDs + money + status only.
+   */
+  async function getOrderForPayment(orderId, userId) {
+    if (!orderId) {
+      throw httpError(400, 'orderId is required');
+    }
+    if (!userId) {
+      throw httpError(400, 'userId is required');
+    }
+
+    const Order = getOrderModel();
+    const order = await Order.findById(orderId).lean();
+    if (!order) {
+      throw new OrderNotFoundError(orderId);
+    }
+    if (String(order.userId) !== String(userId)) {
+      throw httpError(403, 'Order does not belong to this user', 'ORDER_OWNERSHIP');
+    }
+
+    return {
+      orderId: order._id,
+      userId: order.userId,
+      totalAmount: order.totalAmount,
+      status: order.status,
+    };
+  }
+
+  /**
+   * Idempotent consumer for PaymentSucceeded — PENDING → CONFIRMED.
+   */
+  async function handlePaymentSucceededEvent({
+    orderId,
+    userId,
+    paymentId,
+    amount,
+  }) {
+    if (!orderId) {
+      throw new Error('orderId is required');
+    }
+
+    logger.info('orders.handlePaymentSucceededEvent start', {
+      orderId: String(orderId),
+      paymentId: paymentId ? String(paymentId) : undefined,
+      amount,
+    });
+
+    const Order = getOrderModel();
+    const order = await Order.findById(orderId).lean();
+    if (!order) {
+      throw new OrderNotFoundError(orderId);
+    }
+    if (userId != null && String(order.userId) !== String(userId)) {
+      throw httpError(403, 'Order user mismatch', 'ORDER_OWNERSHIP');
+    }
+
+    if (order.status === 'CONFIRMED') {
+      logger.info('orders.handlePaymentSucceededEvent replay', {
+        orderId: String(orderId),
+      });
+      return toOrderDto(order, { replayed: true });
+    }
+
+    if (order.status !== 'PENDING') {
+      throw new OrderStatusConflictError(orderId);
+    }
+
+    return transitionOrderStatus(orderId, 'CONFIRMED');
+  }
+
+  /**
+   * Payment failed after max attempts — order stays PENDING; consumer is idempotent.
+   */
+  async function handlePaymentFailedEvent({ orderId, userId, paymentId, reason }) {
+    if (!orderId) {
+      throw new Error('orderId is required');
+    }
+
+    logger.info('orders.handlePaymentFailedEvent', {
+      orderId: String(orderId),
+      paymentId: paymentId ? String(paymentId) : undefined,
+      reason,
+      userId: userId ? String(userId) : undefined,
+    });
+
+    const Order = getOrderModel();
+    const order = await Order.findById(orderId).lean();
+    if (!order) {
+      throw new OrderNotFoundError(orderId);
+    }
+
+    return toOrderDto(order, { replayed: true, paymentFailed: true });
+  }
+
+  return {
+    placeOrder,
+    transitionOrderStatus,
+    getOrderForPayment,
+    handlePaymentSucceededEvent,
+    handlePaymentFailedEvent,
+  };
 }
 
 module.exports = { createOrderService };

@@ -94,10 +94,9 @@ describe('outbox worker', () => {
     const Payment = getPaymentModel();
     const payment = await Payment.findOne({
       orderId: order.orderId,
-      attempt: 1,
     }).lean();
     assert.ok(payment);
-    assert.equal(payment.status, 'INITIATED');
+    assert.equal(payment.status, 'CREATED');
     assert.equal(payment.amount, 2000);
     assert.equal(String(payment.userId), String(userId));
 
@@ -169,7 +168,6 @@ describe('outbox worker', () => {
     const Payment = getPaymentModel();
     const paymentCount = await Payment.countDocuments({
       orderId: order.orderId,
-      attempt: 1,
     });
     assert.equal(paymentCount, 1);
 
