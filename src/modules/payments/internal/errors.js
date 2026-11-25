@@ -72,7 +72,11 @@ function statusFromError(err) {
     case 'ORDER_NOT_FOUND':
       return 404;
     case 'PAYMENT_OWNERSHIP':
-      return 403;
+    case 'WEBHOOK_UNAUTHORIZED':
+      return 401;
+    case 'GATEWAY_STILL_PROCESSING':
+    case 'GATEWAY_LEDGER_INVALID':
+      return 409;
     case 'INVALID_PAYMENT_TRANSITION':
     case 'PAYMENT_CONFLICT':
     case 'PAYMENT_AMOUNT_MISMATCH':

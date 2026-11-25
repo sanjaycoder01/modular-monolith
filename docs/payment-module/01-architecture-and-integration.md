@@ -81,4 +81,6 @@ Event types: `PaymentSucceeded`, `PaymentFailed`. Unique `{ aggregateId, eventTy
 - `handleOrderCreatedEvent` — outbox consumer
 - `payNow({ orderId, userId, idempotencyKey, simulateOutcome? })` — HTTP + tests
 - `reconcilePaymentAttempt(attemptId)` — repair UNKNOWN/TIMEOUT from mock ledger
+- `handleMockGatewayWebhook` — `POST /payments/webhooks/mock` (see `MOCK_WEBHOOK_SECRET`)
 - `startPaymentsOutboxWorker` — in-process publisher to Orders
+- `startPaymentsReconciliationWorker` / `npm run worker:payment-reconcile` — poll stuck `PROCESSING`/`UNKNOWN`/`TIMEOUT` attempts

@@ -14,9 +14,13 @@
 
 ## 3. Gateway SUCCESS, API crash before persist
 
-**Technique:** mock gateway ledger row reaches `SUCCESS` before the HTTP handler returns; attempt stuck in `PROCESSING` or `UNKNOWN`.
+**Technique:** mock gateway ledger row reaches `SUCCESS` before the HTTP handler returns; `gatewayTransactionId` is persisted on the attempt immediately after the gateway call; attempt stuck in `PROCESSING`.
 
-**Behavior:** `reconcilePaymentAttempt` loads ledger by `gatewayTransactionId` and runs the same finalize transaction idempotently.
+**Behavior:**
+
+- `POST /payments/webhooks/mock` (with `MOCK_WEBHOOK_SECRET`) — async confirmation from the PSP.
+- `reconcilePaymentAttempt` or the **reconciliation worker** loads ledger by `gatewayTransactionId` or `paymentAttemptId`, then runs the same `finalizeSuccess` path idempotently.
+- Test/dev: `simulateOutcome: "CRASH_AFTER_SUCCESS"` on Pay Now skips finalize after a successful gateway call.
 
 ## 4. Customer tampers with amount
 

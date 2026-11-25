@@ -10,6 +10,8 @@ const {
 const {
   processMockPayment,
   getLedgerByGatewayTransactionId,
+  getLedgerByPaymentAttemptId,
+  ledgerToGatewayResult,
 } = require('./mockPaymentGateway');
 
 function readMaxAttempts() {
@@ -298,6 +300,25 @@ function createPaymentService(deps) {
         logger.info('payments.finalizeSuccess outbox replay', {
           paymentId: String(paymentId),
         });
+        const PaymentAttempt = getPaymentAttemptModel();
+        const Payment = getPaymentModel();
+        await PaymentAttempt.findOneAndUpdate(
+          {
+            _id: attemptId,
+            status: { $in: ['PROCESSING', 'UNKNOWN', 'TIMEOUT'] },
+          },
+          {
+            $set: {
+              status: 'SUCCEEDED',
+              gatewayTransactionId,
+              failureReason: null,
+            },
+          }
+        );
+        await Payment.findOneAndUpdate(
+          { _id: paymentId, status: { $ne: 'SUCCEEDED' } },
+          { $set: { status: 'SUCCEEDED' } }
+        );
         return;
       }
       throw err;
@@ -553,7 +574,52 @@ function createPaymentService(deps) {
       simulateOutcome,
     });
 
+    await persistGatewayTransactionIdOnAttempt(
+      attempt._id,
+      gatewayResult.gatewayTransactionId
+    );
+    attempt.gatewayTransactionId = gatewayResult.gatewayTransactionId;
+
+    const crashSim = String(simulateOutcome || '').toUpperCase();
+    if (crashSim === 'CRASH_AFTER_SUCCESS') {
+      logger.warn('payments.payNow simulated crash after gateway success', {
+        paymentAttemptId: String(attempt._id),
+        gatewayTransactionId: gatewayResult.gatewayTransactionId,
+      });
+      return toPaymentAttemptDto(
+        {
+          ...attemptToPlain(attempt),
+          status: 'PROCESSING',
+          gatewayTransactionId: gatewayResult.gatewayTransactionId,
+        },
+        { simulatedCrash: true }
+      );
+    }
+
     return applyGatewayResult(payment, attempt, gatewayResult);
+  }
+
+  async function persistGatewayTransactionIdOnAttempt(
+    attemptId,
+    gatewayTransactionId
+  ) {
+    if (!gatewayTransactionId) return;
+    const PaymentAttempt = getPaymentAttemptModel();
+    await PaymentAttempt.findByIdAndUpdate(attemptId, {
+      $set: { gatewayTransactionId },
+    });
+  }
+
+  async function loadLedgerForAttempt(attempt) {
+    const MockGateway = getMockGatewayTransactionModel;
+    if (attempt.gatewayTransactionId) {
+      const ledger = await getLedgerByGatewayTransactionId(
+        attempt.gatewayTransactionId,
+        MockGateway
+      );
+      if (ledger) return ledger;
+    }
+    return getLedgerByPaymentAttemptId(attempt._id, MockGateway);
   }
 
   async function reconcilePaymentAttempt(paymentAttemptId) {
@@ -563,21 +629,22 @@ function createPaymentService(deps) {
       throw new PaymentAttemptNotFoundError(paymentAttemptId);
     }
 
-    const ledgerId = attempt.gatewayTransactionId;
-    if (!ledgerId) {
-      throw httpError(
-        409,
-        'Attempt has no gatewayTransactionId to reconcile',
-        'PAYMENT_RECONCILE_MISSING_GW_ID'
-      );
+    const terminal = ['SUCCEEDED', 'FAILED'];
+    if (terminal.includes(attempt.status)) {
+      return toPaymentAttemptDto({ ...attempt, replayed: true });
     }
 
-    const ledger = await getLedgerByGatewayTransactionId(
-      ledgerId,
-      getMockGatewayTransactionModel
-    );
+    const ledger = await loadLedgerForAttempt(attempt);
     if (!ledger) {
       throw httpError(404, 'Gateway ledger row not found', 'GATEWAY_LEDGER_NOT_FOUND');
+    }
+
+    if (ledger.status === 'PROCESSING') {
+      throw httpError(
+        409,
+        'Gateway still processing; try again later',
+        'GATEWAY_STILL_PROCESSING'
+      );
     }
 
     const Payment = getPaymentModel();
@@ -586,24 +653,133 @@ function createPaymentService(deps) {
       throw new PaymentNotFoundError(attempt.paymentId);
     }
 
-    const gatewayResult = {
-      gatewayTransactionId: ledger.gatewayTransactionId,
-      outcome:
-        ledger.status === 'SUCCESS'
-          ? 'SUCCESS'
-          : ledger.status === 'FAILED'
-            ? 'FAILED'
-            : ledger.status,
-      failureReason: ledger.failureReason,
-    };
+    const gatewayResult = ledgerToGatewayResult(ledger);
+    if (!gatewayResult) {
+      throw httpError(409, 'Unable to map gateway ledger status', 'GATEWAY_LEDGER_INVALID');
+    }
+
+    if (!attempt.gatewayTransactionId && ledger.gatewayTransactionId) {
+      await persistGatewayTransactionIdOnAttempt(
+        attempt._id,
+        ledger.gatewayTransactionId
+      );
+      attempt.gatewayTransactionId = ledger.gatewayTransactionId;
+    }
 
     return applyGatewayResult(payment, attempt, gatewayResult);
+  }
+
+  /**
+   * Mock PSP webhook — confirms payment using gateway ledger as source of truth.
+   */
+  async function handleMockGatewayWebhook({
+    gatewayTransactionId,
+    webhookSecret,
+  }) {
+    if (!gatewayTransactionId) {
+      throw httpError(400, 'gatewayTransactionId is required');
+    }
+
+    const expectedSecret = process.env.MOCK_WEBHOOK_SECRET;
+    if (expectedSecret) {
+      if (!webhookSecret || webhookSecret !== expectedSecret) {
+        throw httpError(401, 'Invalid webhook secret', 'WEBHOOK_UNAUTHORIZED');
+      }
+    }
+
+    logger.info('payments.webhook.mock start', {
+      gatewayTransactionId,
+    });
+
+    const ledger = await getLedgerByGatewayTransactionId(
+      gatewayTransactionId,
+      getMockGatewayTransactionModel
+    );
+    if (!ledger) {
+      throw httpError(404, 'Gateway ledger row not found', 'GATEWAY_LEDGER_NOT_FOUND');
+    }
+
+    if (ledger.status === 'PROCESSING') {
+      throw httpError(
+        409,
+        'Payment not completed at gateway yet',
+        'GATEWAY_STILL_PROCESSING'
+      );
+    }
+
+    const PaymentAttempt = getPaymentAttemptModel();
+    const attempt = await PaymentAttempt.findById(ledger.paymentAttemptId).lean();
+    if (!attempt) {
+      throw new PaymentAttemptNotFoundError(ledger.paymentAttemptId);
+    }
+
+    if (attempt.status === 'SUCCEEDED') {
+      return toPaymentAttemptDto({ ...attempt, replayed: true, viaWebhook: true });
+    }
+
+    const Payment = getPaymentModel();
+    const payment = await Payment.findById(attempt.paymentId).lean();
+    if (!payment) {
+      throw new PaymentNotFoundError(attempt.paymentId);
+    }
+
+    if (!attempt.gatewayTransactionId) {
+      await persistGatewayTransactionIdOnAttempt(
+        attempt._id,
+        ledger.gatewayTransactionId
+      );
+      attempt.gatewayTransactionId = ledger.gatewayTransactionId;
+    }
+
+    const gatewayResult = ledgerToGatewayResult(ledger);
+    const result = await applyGatewayResult(payment, attempt, gatewayResult);
+    return { ...result, viaWebhook: true };
+  }
+
+  /**
+   * Worker batch — reconcile stale PROCESSING / UNKNOWN / TIMEOUT attempts.
+   */
+  async function reconcileStuckPaymentAttempts({ staleMs, batchSize }) {
+    const PaymentAttempt = getPaymentAttemptModel();
+    const cutoff = new Date(Date.now() - staleMs);
+    const stuck = await PaymentAttempt.find({
+      status: { $in: ['PROCESSING', 'UNKNOWN', 'TIMEOUT'] },
+      updatedAt: { $lte: cutoff },
+    })
+      .sort({ updatedAt: 1 })
+      .limit(batchSize)
+      .lean();
+
+    let processed = 0;
+    let skipped = 0;
+
+    for (const row of stuck) {
+      try {
+        await reconcilePaymentAttempt(row._id);
+        processed += 1;
+      } catch (err) {
+        if (err.code === 'GATEWAY_STILL_PROCESSING') {
+          skipped += 1;
+          continue;
+        }
+        logger.error('payments.reconcile.worker attempt failed', {
+          paymentAttemptId: String(row._id),
+          message: err.message,
+          code: err.code,
+        });
+        skipped += 1;
+      }
+    }
+
+    return { processed, skipped, candidates: stuck.length };
   }
 
   return {
     handleOrderCreatedEvent,
     payNow,
     reconcilePaymentAttempt,
+    reconcileStuckPaymentAttempts,
+    handleMockGatewayWebhook,
     toPaymentDto,
     toPaymentAttemptDto,
   };

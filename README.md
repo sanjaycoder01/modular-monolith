@@ -44,6 +44,8 @@ No arrow means “joined in a query”. Each arrow is a stored ID; other data ar
 | Inventory | `releaseStock(items)`            | undo a reservation                                    |
 | Payments  | `handleOrderCreatedEvent(...)`   | idempotent `CREATED` payment for an order |
 | Payments  | `POST /payments/pay`             | Pay Now (mock gateway, idempotent) |
+| Payments  | `POST /payments/webhooks/mock`   | PSP webhook → finalize stuck attempts |
+| Payments  | `POST /payments/attempts/:id/reconcile` | Manual reconcile from gateway ledger |
 | Orders    | `handlePaymentSucceededEvent`    | idempotent `PENDING` → `CONFIRMED` |
 | Orders    | `runOutboxWorkerOnce()`          | poll/claim/publish pending outbox events (also auto-started on `npm start`) |
 

@@ -150,9 +150,40 @@ async function getLedgerByGatewayTransactionId(
   return MockGatewayTransaction.findOne({ gatewayTransactionId }).lean();
 }
 
+async function getLedgerByPaymentAttemptId(
+  paymentAttemptId,
+  getMockGatewayTransactionModel
+) {
+  const MockGatewayTransaction = getMockGatewayTransactionModel();
+  return MockGatewayTransaction.findOne({ paymentAttemptId }).lean();
+}
+
+/**
+ * Map mock ledger row → applyGatewayResult input.
+ * @param {import('./MockGatewayTransaction').MockGatewayTransaction} ledger
+ */
+function ledgerToGatewayResult(ledger) {
+  if (!ledger) {
+    return null;
+  }
+  let outcome = ledger.status;
+  if (ledger.status === 'SUCCESS') {
+    outcome = 'SUCCESS';
+  } else if (ledger.status === 'FAILED') {
+    outcome = 'FAILED';
+  }
+  return {
+    gatewayTransactionId: ledger.gatewayTransactionId,
+    outcome,
+    failureReason: ledger.failureReason,
+  };
+}
+
 module.exports = {
   processMockPayment,
   getLedgerByGatewayTransactionId,
+  getLedgerByPaymentAttemptId,
+  ledgerToGatewayResult,
   newGatewayTransactionId,
   resolveOutcome,
 };
